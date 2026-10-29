@@ -1888,7 +1888,7 @@ fn argb(c: i32) -> u32 {
 }
 
 /// A sub-rectangle of a sprite given in texels.
-fn sub_rect(r: Rect, [x, y, w, h]: [f32; 4]) -> Rect {
+pub(super) fn sub_rect(r: Rect, [x, y, w, h]: [f32; 4]) -> Rect {
     let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
     Rect {
         u0: r.u0 + x * du,

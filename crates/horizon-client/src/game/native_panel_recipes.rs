@@ -9,7 +9,7 @@ use super::{
         NativePanelEvent as BrowserEvent, NativeRecipeLayout as BrowserLayout,
         NativeRecipeView as BrowserRecipe, NativeStack as BrowserStack,
     },
-    native_panel::{Layout, Owner, browser_stack, inside},
+    native_panel::{LABEL, Layout, Owner, browser_stack, inside},
 };
 use horizon_client::{
     hud::{HudBatch, rgba},
@@ -448,8 +448,8 @@ impl Game<'_> {
             &shown,
             back[0] + back[2] + 4.0,
             back[1] + 3.0,
-            u32::MAX,
-            true,
+            LABEL,
+            false,
         );
         self.draw_recipe_tabs(batch, layout);
         if pages_n > 1 {
@@ -484,7 +484,7 @@ impl Game<'_> {
             let text = format!("{}/{pages_n}", page + 1);
             let w = HudBatch::text_width(atlas, &text);
             let x = (layout.grid.0 + (layout.width() - w) / 2.0).floor();
-            batch.text(atlas, &text, x, layout.arrows_y + 5.0, u32::MAX, true);
+            batch.text(atlas, &text, x, layout.arrows_y + 5.0, LABEL, false);
         }
         for (i, (x, y)) in self.recipes_shown(layout) {
             let Some(r) = self.panel.recipes.as_ref().map(|p| &p.recipes[i]) else {
@@ -507,12 +507,14 @@ impl Game<'_> {
                     y + SLOT + 2.0,
                 );
             }
-            batch.sprite(
-                atlas,
-                "gui/sprites/container/furnace/burn_progress",
-                x + arrow.0,
-                y + arrow.1,
-            );
+            // The white arrow in the grey of the containers' own arrows.
+            if let Some(r) = atlas
+                .sprites
+                .get("gui/sprites/container/furnace/burn_progress")
+            {
+                let (w, h) = (r.w as f32, r.h as f32);
+                batch.rect_uv(x + arrow.0, y + arrow.1, w, h, *r, 0xFF8B_8B8B);
+            }
             if self.screen != super::Screen::Creative
                 && let Some(enabled) = button
             {
@@ -541,7 +543,7 @@ impl Game<'_> {
                 horizon_client::widgets::record(&format!("+ {i}"), rect, enabled);
             }
             if !note.is_empty() {
-                batch.text(atlas, &note, x, y + h + 2.0, rgba(224, 224, 224, 255), true);
+                batch.text(atlas, &note, x, y + h + 2.0, LABEL, false);
             }
             for (k, &(sx, sy)) in at.iter().enumerate().filter(|(_, p)| p.0.is_finite()) {
                 let Some((_, stack)) = self.recipe_slot_now(i, k).cloned() else {

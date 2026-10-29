@@ -5,14 +5,17 @@
 //! mod says what the panel holds; the game pages it and tells the mod what
 //! the player clicked, typed, and which keys went down over an item
 //! (`native_panel_event`). With no mod showing a panel, each hook here
-//! returns after one check.
+//! returns after one check. It sits on the recipe book's window, stretched
+//! to the panel ([`draw_window`]), its items in slots, its labels in the
+//! containers' grey.
 use super::{
     Game, Screen,
     native_hooks::{NativePanelEvent as BrowserEvent, NativeStack as BrowserStack},
     native_panel_recipes::RecipePage,
+    recipe_book::sub_rect,
 };
 use horizon_client::{
-    hud::{HudBatch, rgba},
+    hud::{HudAtlas, HudBatch, rgba},
     items::ItemStack,
     mod_api::NativePanelStyle,
     ui::EditBox,
@@ -25,6 +28,35 @@ const COLUMNS: (usize, usize) = (12, 2);
 /// The gap between the window and the panel, and the screen's edges.
 const MARGIN: f32 = 8.0;
 const RECIPES_SETTINGS_WIDTH: f32 = 20.0;
+/// The panel's window reaches this far past its contents, inside `MARGIN`.
+const FRAME: f32 = 7.0;
+/// Text on the panel's window, as a container's labels (0x404040, no shadow).
+pub(super) const LABEL: u32 = 0xFF40_4040;
+
+/// The recipe book's window (`textures/gui/recipe_book.png`, 147 x 166 at
+/// 1, 1) at any size: its bevelled border of `BORDER` texels kept, one texel
+/// of its edges and its grey inside stretched between them.
+fn draw_window(batch: &mut HudBatch, atlas: &HudAtlas, [x, y, w, h]: [f32; 4]) {
+    const BORDER: f32 = 4.0;
+    const SOURCE: [f32; 4] = [1.0, 1.0, 147.0, 166.0];
+    let Some(r) = atlas.sprites.get("gui/recipe_book").copied() else {
+        return;
+    };
+    let [u, v, tw, th] = SOURCE;
+    // Each band: where it is read (start, size), where it is drawn (start, size).
+    let bands = |s: f32, size: f32, d: f32, length: f32| {
+        [
+            (s, BORDER, d, BORDER),
+            (s + BORDER, 1.0, d + BORDER, length - 2.0 * BORDER),
+            (s + size - BORDER, BORDER, d + length - BORDER, BORDER),
+        ]
+    };
+    for (sy, sh, dy, dh) in bands(v, th, y, h) {
+        for (sx, sw, dx, dw) in bands(u, tw, x, w) {
+            batch.rect_uv(dx, dy, dw, dh, sub_rect(r, [sx, sy, sw, sh]), u32::MAX);
+        }
+    }
+}
 
 /// Items a panel may hold.
 const ITEMS: usize = 8192;
@@ -454,11 +486,15 @@ impl Game<'_> {
                 &text,
                 x,
                 layout.arrows_y + if square { 6.0 } else { 5.0 },
-                u32::MAX,
-                true,
+                LABEL,
+                false,
             );
         }
         let first = page * layout.per_page();
+        for n in 0..layout.per_page() {
+            let (x, y) = layout.slot(n);
+            batch.sprite(&self.gui.atlas, "gui/sprites/container/slot", x, y);
+        }
         for n in 0..layout.per_page() {
             let Some(stack) = self.panel.stacks.get(first + n) else {
                 break;
@@ -498,6 +534,10 @@ impl Game<'_> {
             return;
         };
         let cursor = self.cursor;
+        let (x, y) = (layout.grid.0 - FRAME, layout.arrows_y - FRAME);
+        let bottom = layout.search[1] + layout.search[3] + FRAME;
+        let frame = [x, y, layout.width() + 2.0 * FRAME, bottom - y];
+        draw_window(batch, &self.gui.atlas, frame);
         if self.panel.recipes.is_some() {
             self.draw_browser_recipes(batch, &layout);
         } else {
