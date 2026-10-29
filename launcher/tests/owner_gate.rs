@@ -4,7 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const REFUSED: &str = "Sign in with a Microsoft account that owns Minecraft: Java Edition to play.";
+const REFUSED: &str =
+    "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline.";
 
 /// Fresh homes with one installed (not prepared) version and an offline name, as a player who
 /// played offline before the gate has.

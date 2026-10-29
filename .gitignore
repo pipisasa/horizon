@@ -3,6 +3,8 @@
 **/__pycache__/
 *.py[cod]
 /.venv/
+# Local build-time keys (launcher/build.rs reads it); .env.example lists them.
+/.env
 # Downloaded/decompiled game content and private profiling artifacts.
 *.jar
 *.class

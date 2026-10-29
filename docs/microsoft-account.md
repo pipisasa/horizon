@@ -93,6 +93,28 @@ possible; the launcher just doesn't offer it on its own.
   the launcher's tests use accounts in a memory store (`MemoryStore`, and `HORIZON_NO_KEYCHAIN`
   for the CLI and MCP tests, which then have no owner).
 
+## GitHub and Google sign-in (offline play only)
+
+This fork adds a second way through the gate (`launcher/src/account/external.rs`). A GitHub or Google
+account signs in with its own device-code flow and then plays **offline**, under an offline name the
+player picks once the sign-in is through. It gets no session, so it can't join online-mode servers and
+never counts as an owner for the Mojang download below.
+
+- **Flows:** GitHub `POST github.com/login/device/code` (no scope), then polling
+  `…/login/oauth/access_token`, then `GET api.github.com/user` (`id`, `login`). Google
+  `POST oauth2.googleapis.com/device/code` (`openid profile`), then polling `…/token` (with the client
+  secret), then the OpenID `userinfo` (`sub`, `name`).
+- **Storage:** `accounts.json` `external` keeps the provider, its user ID, its login and the offline
+  name. No token is kept. The keychain item `<provider>:<id>` (`{"signed_in_at"}`) is what opens the
+  gate, so a plain file still can't. Signing out deletes that item, and the offline name stays.
+- **Configuration** (build time or run time, empty means none): `HORIZON_GITHUB_CLIENT_ID` (an OAuth
+  app with "Enable Device Flow" ticked) and `HORIZON_GOOGLE_CLIENT_ID` plus
+  `HORIZON_GOOGLE_CLIENT_SECRET` (an OAuth client of type "TV and Limited Input devices"). Without
+  them the buttons don't show.
+- **Where:** Settings and the gate's screen have GitHub and Google buttons, and the quick switch
+  shows "Offline · GitHub". The CLI takes `horizon-launcher account sign-in --with github [--name NAME]`
+  and asks for the name when it isn't given. In the MCP, `account_sign_in` takes `provider` and `name`.
+
 ## Downloading the game for an owner
 
 Decided 2026-10-27. This is the only exception to "Horizon never downloads the game", and it

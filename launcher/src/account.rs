@@ -8,6 +8,7 @@
 //! The owner gate ([`launch`]): the launcher starts the game only while an account in it owns
 //! Minecraft: Java Edition, as other launchers do. Offline names play behind such an account.
 //! The game binary itself, its harnesses and the servers don't go through the launcher's gate.
+//! A GitHub or Google sign-in ([`external`]) opens it too, for offline play only.
 //!
 //! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
 //! build time, or at run time to override it. Without one, sign-in says it is not configured.
@@ -17,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod external;
+use external::{External, Identity, Provider};
+
 /// The keychain service name every secret is stored under.
 pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
@@ -24,7 +28,7 @@ pub const NOT_CONFIGURED: &str =
     "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
 /// What every Play says while no account in the launcher owns the game.
 pub const NEEDS_OWNER: &str =
-    "Sign in with a Microsoft account that owns Minecraft: Java Edition to play";
+    "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline";
 const DOES_NOT_OWN: &str = "This account doesn't own Minecraft: Java Edition.";
 const NO_PROFILE: &str =
     "This account has no Minecraft profile yet. Create one at minecraft.net, then sign in again.";
@@ -156,11 +160,11 @@ impl std::fmt::Debug for MsTokens {
     }
 }
 
-pub enum Poll {
+pub enum Poll<T = MsTokens> {
     Pending,
     /// The server asked to poll less often: wait 5 s more.
     SlowDown,
-    Done(MsTokens),
+    Done(T),
 }
 
 pub fn device_code(ep: &Endpoints, client_id: &str) -> Result<DeviceCode, String> {
@@ -243,6 +247,15 @@ pub fn wait_for_sign_in(
     code: &DeviceCode,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<MsTokens, String> {
+    wait_for(code, cancelled, &|| poll(ep, client_id, code))
+}
+
+/// Polls with `poll` every `code.interval` seconds (more when asked) until it is done.
+fn wait_for<T>(
+    code: &DeviceCode,
+    cancelled: &dyn Fn() -> bool,
+    poll: &dyn Fn() -> Result<Poll<T>, String>,
+) -> Result<T, String> {
     let mut interval = code.interval;
     loop {
         let until = std::time::Instant::now() + Duration::from_secs(interval);
@@ -255,7 +268,7 @@ pub fn wait_for_sign_in(
         if now() > code.expires_at {
             return Err("The sign-in code expired. Start again.".into());
         }
-        match poll(ep, client_id, code)? {
+        match poll()? {
             Poll::Pending => {}
             Poll::SlowDown => interval += 5,
             Poll::Done(tokens) => return Ok(tokens),
@@ -771,6 +784,9 @@ pub struct Accounts {
     /// Each offline name's skin and cape (`skins`), by the name in lowercase.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub looks: std::collections::BTreeMap<String, crate::skins::Look>,
+    /// GitHub and Google accounts: each plays offline under one of the offline names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external: Vec<External>,
 }
 
 /// Who plays, as the quick switch lists them.
@@ -785,7 +801,7 @@ pub enum Player {
 }
 
 const OFFLINE_NEEDS_OWNER: &str =
-    "Offline names need a Microsoft account that owns Minecraft: Java Edition in the launcher.";
+    "Offline names need a Microsoft account that owns Minecraft: Java Edition, or a GitHub or Google sign-in, in the launcher.";
 
 /// The secrets an account keeps in `store`, if it still has them there.
 fn secrets_in(store: &dyn SecretStore, uuid: &str) -> Option<Secrets> {
@@ -857,6 +873,67 @@ impl Accounts {
             .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
     }
 
+    /// Whether a GitHub or Google account here is still signed in (its keychain item).
+    pub fn has_external(&self, store: &dyn SecretStore) -> bool {
+        self.external.iter().any(|a| external::signed_in(store, a))
+    }
+
+    /// What opens the gate: an owner, or a GitHub or Google sign-in for offline play.
+    pub fn can_play(&self, store: &dyn SecretStore) -> bool {
+        self.has_owner(store) || self.has_external(store)
+    }
+
+    /// The GitHub or Google account that plays under the offline name `name`, if one does.
+    pub fn external_for(&self, name: &str) -> Option<&External> {
+        self.external
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Keeps a GitHub or Google sign-in under the offline name the player chose, and plays as it.
+    pub fn add_external(
+        &mut self,
+        store: &dyn SecretStore,
+        who: &Identity,
+        name: &str,
+    ) -> Result<String, String> {
+        let key = format!("{}:{}", who.provider.key(), who.id);
+        if let Some(other) = self.external_for(name.trim()).filter(|a| a.key() != key) {
+            return Err(format!(
+                "{} already plays for the {} account {}.",
+                other.name,
+                other.provider.label(),
+                other.login
+            ));
+        }
+        let name = self.add_offline(name)?;
+        let account = External {
+            provider: who.provider,
+            id: who.id.clone(),
+            login: who.login.clone(),
+            name: name.clone(),
+        };
+        external::remember(store, &account)?;
+        self.external
+            .retain(|a| a.key() != account.key() && !a.name.eq_ignore_ascii_case(&name));
+        self.external.push(account);
+        self.selected = None;
+        self.offline_selected = Some(name.clone());
+        Ok(name)
+    }
+
+    /// Signs a GitHub or Google account out by its offline name: its keychain item goes, the
+    /// name stays (and plays only while something else opens the gate).
+    pub fn remove_external(&mut self, store: &dyn SecretStore, name: &str) -> Result<(), String> {
+        let account = self
+            .external_for(name)
+            .cloned()
+            .ok_or_else(|| format!("No GitHub or Google account plays as {name}."))?;
+        store.delete(&account.key())?;
+        self.external.retain(|a| a.key() != account.key());
+        Ok(())
+    }
+
     /// Who plays now.
     pub fn player(&self) -> Player {
         match (self.selected(), &self.offline_selected) {
@@ -889,7 +966,7 @@ impl Accounts {
                 self.selected = Some(uuid);
             }
             Player::Offline(name) => {
-                if !offline_without_owner && !self.has_owner(store) {
+                if !offline_without_owner && !self.can_play(store) {
                     return Err(OFFLINE_NEEDS_OWNER.into());
                 }
                 let name = self.add_offline(&name)?;
@@ -1059,7 +1136,8 @@ pub fn launch(
             }
         }
     }
-    if owned {
+    // A GitHub or Google sign-in plays offline: no session, no owner to download for.
+    if owned || accounts.has_external(store) {
         Ok(pass)
     } else {
         Err(NoOwner)
@@ -1131,40 +1209,81 @@ pub enum SignInState {
     Starting,
     /// Waiting for the player at `verification_uri` with `user_code`.
     Code(DeviceCode),
-    Done(Result<Account, String>),
+    /// A GitHub or Google sign-in is through: the window asks for the offline name, then
+    /// [`Accounts::add_external`].
+    ChooseName(Identity),
+    /// The name that plays now.
+    Done(Result<String, String>),
 }
 
 /// A sign-in on its own thread, from the code to the saved account.
 pub struct SignIn {
     state: std::sync::Arc<Mutex<SignInState>>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Who it asks: "Microsoft", "GitHub" or "Google".
+    pub service: &'static str,
 }
 
 impl SignIn {
+    /// The Microsoft sign-in.
     pub fn start() -> Self {
+        Self::spawn("Microsoft", |set, cancelled| {
+            let ep = Endpoints::live();
+            let client_id = client_id().ok_or(NOT_CONFIGURED)?;
+            let code = device_code(&ep, &client_id)?;
+            set(SignInState::Code(code.clone()));
+            let ms = wait_for_sign_in(&ep, &client_id, &code, cancelled)?;
+            let (account, secrets) = finish_sign_in(&ep, ms)?;
+            let mut accounts = Accounts::load();
+            accounts.add(store(), account.clone(), &secrets)?;
+            accounts.save()?;
+            Ok(Some(account.name))
+        })
+    }
+
+    /// A GitHub or Google sign-in that plays as `name`, or, without one, stops at
+    /// [`SignInState::ChooseName`] for the window to ask.
+    pub fn start_external(provider: Provider, name: Option<String>) -> Self {
+        Self::spawn(provider.label(), move |set, cancelled| {
+            let ep = external::Endpoints::live();
+            let code = external::device_code(&ep, provider)?;
+            set(SignInState::Code(code.clone()));
+            let who = external::wait_for_identity(&ep, provider, &code, cancelled)?;
+            let Some(name) = name else {
+                set(SignInState::ChooseName(who));
+                return Ok(None);
+            };
+            let mut accounts = Accounts::load();
+            let name = accounts.add_external(store(), &who, &name)?;
+            accounts.save()?;
+            Ok(Some(name))
+        })
+    }
+
+    /// Runs `run` on its own thread; it ends in `Done` unless it set its last state itself.
+    fn spawn(
+        service: &'static str,
+        run: impl FnOnce(&dyn Fn(SignInState), &dyn Fn() -> bool) -> Result<Option<String>, String>
+            + Send
+            + 'static,
+    ) -> Self {
         use std::sync::atomic::Ordering;
         let state = std::sync::Arc::new(Mutex::new(SignInState::Starting));
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (thread_state, thread_cancel) = (state.clone(), cancel.clone());
         std::thread::spawn(move || {
-            let set = |s| *thread_state.lock().unwrap() = s;
-            let result = (|| {
-                let ep = Endpoints::live();
-                let client_id = client_id().ok_or(NOT_CONFIGURED)?;
-                let code = device_code(&ep, &client_id)?;
-                set(SignInState::Code(code.clone()));
-                let ms = wait_for_sign_in(&ep, &client_id, &code, &|| {
-                    thread_cancel.load(Ordering::Relaxed)
-                })?;
-                let (account, secrets) = finish_sign_in(&ep, ms)?;
-                let mut accounts = Accounts::load();
-                accounts.add(store(), account.clone(), &secrets)?;
-                accounts.save()?;
-                Ok(account)
-            })();
-            set(SignInState::Done(result));
+            let set = |s: SignInState| *thread_state.lock().unwrap() = s;
+            match run(&set, &|| thread_cancel.load(Ordering::Relaxed)) {
+                Ok(None) => {}
+                Ok(Some(name)) => set(SignInState::Done(Ok(name))),
+                Err(e) => set(SignInState::Done(Err(e))),
+            }
         });
-        Self { state, cancel }
+        Self {
+            state,
+            cancel,
+            service,
+        }
     }
     pub fn state(&self) -> SignInState {
         self.state.lock().unwrap().clone()

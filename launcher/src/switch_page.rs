@@ -14,11 +14,23 @@ impl Launcher {
                     .map_or_else(String::new, |a| a.name.clone()),
                 tr("Microsoft account"),
             ),
-            Player::Offline(name) => (name, tr("Offline")),
+            Player::Offline(name) => {
+                let how = self.offline_how(&name);
+                (name, how)
+            }
             Player::GameName => (
                 self.offline_name.clone().unwrap_or_else(|| "Player".into()),
                 tr("Offline"),
             ),
+        }
+    }
+
+    /// How an offline name plays: through a GitHub or Google sign-in, or as a plain name.
+    fn offline_how(&self, name: &str) -> &'static str {
+        match self.accounts.external_for(name).map(|e| e.provider) {
+            Some(account::external::Provider::GitHub) => tr("Offline · GitHub"),
+            Some(account::external::Provider::Google) => tr("Offline · Google"),
+            None => tr("Offline"),
         }
     }
 
@@ -52,7 +64,7 @@ impl Launcher {
             self.accounts
                 .offline
                 .iter()
-                .map(|n| (Player::Offline(n.clone()), n.clone(), tr("Offline"))),
+                .map(|n| (Player::Offline(n.clone()), n.clone(), self.offline_how(n))),
         );
         out.push((
             Player::GameName,

@@ -52,7 +52,7 @@
   "Another account": "Anderes Konto",
   "Microsoft account · plays": "Microsoft-Konto · spielt",
   "Microsoft account · signed in": "Microsoft-Konto · angemeldet",
-  "Asking Microsoft…": "Frage Microsoft…",
+  "Asking {service}…": "Frage {service}…",
   "Add another account.": "Weiteres Konto hinzufügen.",
   "Copy code": "Code kopieren",
   "Open link": "Link öffnen",
@@ -159,8 +159,8 @@
   "Prepared for Minecraft {version}": "Für Minecraft {version} vorbereitet",
   "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "Für Minecraft {version} ohne Sound vorbereitet: das Spiel bleibt stumm. Bereite es erneut vor, um die Sounds von deiner Minecraft-Installation zu kopieren.",
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "Diese Version des Launchers hat keine Microsoft-Anmeldung (HORIZON_MSA_CLIENT_ID). Das Spiel kann daher nicht gestartet werden.",
-  "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Melde dich mit einem Microsoft-Konto an, das Minecraft: Java Edition besitzt, um zu spielen",
-  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Horizon benötigt wie andere Launcher ein Microsoft-Konto, das Minecraft: Java Edition besitzt. Damit kannst du auch mit deinem Namen und Skin auf Online-Servern spielen.",
+  "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline": "Melde dich mit einem Microsoft-Konto an, das Minecraft: Java Edition besitzt, oder mit GitHub oder Google, um offline zu spielen",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin. GitHub and Google play offline only.": "Horizon benötigt wie andere Launcher ein Microsoft-Konto, das Minecraft: Java Edition besitzt. Damit kannst du auch mit deinem Namen und Skin auf Online-Servern spielen. GitHub und Google spielen nur offline.",
   "Sign in": "Anmelden",
   "Sign in with Microsoft": "Mit Microsoft anmelden",
   "Not now": "Nicht jetzt",
@@ -185,5 +185,12 @@
   "Delete old versions automatically": "Alte Versionen automatisch löschen",
   "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Behält die {count} neuesten, die verwendete und die von deinen Instanzen genutzten. Gelöschte Versionen lassen sich auf der Seite Versionen wieder installieren.",
   "Installed versions use {size}.": "Installierte Versionen belegen {size}.",
-  "{size} on disk": "{size} auf dem Datenträger"
+  "{size} on disk": "{size} auf dem Datenträger",
+  "Offline · GitHub": "Offline · GitHub",
+  "Offline · Google": "Offline · Google",
+  "Signed in to {service} as {login}. Choose the offline name you play under:": "Bei {service} als {login} angemeldet. Wähle den Offline-Namen, unter dem du spielst:",
+  "Play as this name": "Unter diesem Namen spielen",
+  "offline · plays": "offline · spielt",
+  "offline": "offline",
+  "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.": "Oder melde dich mit GitHub oder Google an, um offline zu spielen: im LAN und auf Servern im Offline-Modus, unter einem Namen deiner Wahl."
 }

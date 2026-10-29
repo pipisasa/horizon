@@ -113,6 +113,43 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
                           {"id": "c2", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/cape2", "alias": "Vanilla"}],
             }),
         ),
+        // GitHub and Google (`external`).
+        ("POST", "/gh/login/device/code") => {
+            assert_eq!(form("client_id").as_deref(), Some("gh-client"));
+            reply(
+                200,
+                json!({"device_code": "gh-dev", "user_code": "WXYZ-1234", "verification_uri": "https://github.com/login/device", "expires_in": 900, "interval": 1}),
+            )
+        }
+        ("POST", "/gh/login/oauth/access_token") if mock.pending > 0 => {
+            mock.pending -= 1;
+            // GitHub says it with a 200.
+            reply(200, json!({"error": "authorization_pending"}))
+        }
+        ("POST", "/gh/login/oauth/access_token") => {
+            assert_eq!(form("device_code").as_deref(), Some("gh-dev"));
+            reply(
+                200,
+                json!({"access_token": "gho_1", "token_type": "bearer"}),
+            )
+        }
+        ("GET", "/ghapi/user") if auth == "Bearer gho_1" => {
+            reply(200, json!({"id": 583231, "login": "octo-cat"}))
+        }
+        ("POST", "/google/device/code") => {
+            assert_eq!(form("scope").as_deref(), Some("openid profile"));
+            reply(
+                200,
+                json!({"device_code": "g-dev", "user_code": "GQVQ-JKEC", "verification_url": "https://www.google.com/device", "expires_in": 1800, "interval": 1}),
+            )
+        }
+        ("POST", "/google/token") => {
+            assert_eq!(form("client_secret").as_deref(), Some("g-secret"));
+            reply(200, json!({"access_token": "ya29.1", "id_token": "x"}))
+        }
+        ("GET", "/google/userinfo") if auth == "Bearer ya29.1" => {
+            reply(200, json!({"sub": "1170", "name": "Ada Lovelace"}))
+        }
         _ => reply(404, json!({"error": "NotFound"})),
     }
 }
@@ -353,7 +390,7 @@ fn a_no_from_the_services_blocks_at_once() {
     );
     assert_eq!(
         NoOwner.to_string(),
-        "Sign in with a Microsoft account that owns Minecraft: Java Edition to play."
+        "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline."
     );
 }
 
@@ -703,4 +740,132 @@ fn offline_names_switch_with_accounts() {
         serde_json::to_string(&old).unwrap(),
         r#"{"accounts":[],"selected":null}"#
     );
+}
+
+/// The mock's GitHub and Google endpoints.
+fn external_endpoints(ep: &Endpoints) -> external::Endpoints {
+    let base = ep.microsoft.trim_end_matches("/ms");
+    external::Endpoints {
+        github_web: format!("{base}/gh"),
+        github_api: format!("{base}/ghapi"),
+        google_oauth: format!("{base}/google"),
+        google_userinfo: format!("{base}/google/userinfo"),
+    }
+}
+
+#[test]
+fn github_and_google_sign_in_say_who_signed_in() {
+    // The only test that sets these.
+    std::env::set_var("HORIZON_GITHUB_CLIENT_ID", "gh-client");
+    std::env::set_var("HORIZON_GOOGLE_CLIENT_ID", "g-client");
+    std::env::remove_var("HORIZON_GOOGLE_CLIENT_SECRET");
+    // A build may have them built in (a fork's `.env`).
+    let built = |v: Option<&str>| v.is_some_and(|v| !v.trim().is_empty());
+    assert_eq!(
+        Provider::Google.configured(),
+        built(option_env!("HORIZON_GOOGLE_CLIENT_SECRET"))
+    );
+    std::env::set_var("HORIZON_GOOGLE_CLIENT_SECRET", "g-secret");
+    let (m, ep) = mock(|m| m.pending = 1);
+    let ext = external_endpoints(&ep);
+
+    let code = external::device_code(&ext, Provider::GitHub).unwrap();
+    assert_eq!(code.user_code, "WXYZ-1234");
+    let who = external::wait_for_identity(&ext, Provider::GitHub, &code, &|| false).unwrap();
+    assert_eq!(
+        who,
+        Identity {
+            provider: Provider::GitHub,
+            id: "583231".into(),
+            login: "octo-cat".into()
+        }
+    );
+    assert_eq!(who.suggested_name(), "octo_cat");
+    assert_eq!(
+        m.lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("access_token"))
+            .count(),
+        2
+    );
+
+    let code = external::device_code(&ext, Provider::Google).unwrap();
+    assert_eq!(code.verification_uri, "https://www.google.com/device");
+    let who = external::wait_for_identity(&ext, Provider::Google, &code, &|| false).unwrap();
+    assert_eq!(
+        (who.id.as_str(), who.suggested_name().as_str()),
+        ("1170", "Ada_Lovelace")
+    );
+
+    for var in [
+        "HORIZON_GITHUB_CLIENT_ID",
+        "HORIZON_GOOGLE_CLIENT_ID",
+        "HORIZON_GOOGLE_CLIENT_SECRET",
+    ] {
+        std::env::remove_var(var);
+    }
+    assert_eq!(
+        Provider::GitHub.configured(),
+        built(option_env!("HORIZON_GITHUB_CLIENT_ID"))
+    );
+}
+
+fn octocat() -> Identity {
+    Identity {
+        provider: Provider::GitHub,
+        id: "583231".into(),
+        login: "octo-cat".into(),
+    }
+}
+
+#[test]
+fn a_github_sign_in_opens_the_gate_for_offline_play_only() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    assert!(!accounts.can_play(&store));
+    let name = accounts.add_external(&store, &octocat(), "Octo_1").unwrap();
+    assert_eq!(name, "Octo_1");
+    assert_eq!(accounts.player(), Player::Offline("Octo_1".into()));
+    assert_eq!(accounts.name_arg(), Some("Octo_1"));
+    assert!(accounts.can_play(&store) && !accounts.has_owner(&store));
+    // Nothing secret in accounts.json: the keychain item says it signed in.
+    assert!(!serde_json::to_string(&accounts).unwrap().contains("gho_"));
+    assert!(store.get("github:583231").unwrap().is_some());
+    // Play starts offline: no session, and no owner to download the game for.
+    let pass = launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    // Other offline names play beside it.
+    accounts
+        .play_as(&store, Player::Offline("Builder_1".into()))
+        .unwrap();
+    // A name an offline name can't be is refused, and nothing is kept.
+    assert!(accounts.add_external(&store, &octocat(), "no").is_err());
+    assert_eq!(accounts.external.len(), 1);
+}
+
+#[test]
+fn signing_in_again_renames_and_signing_out_closes_the_gate() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts.add_external(&store, &octocat(), "Octo_1").unwrap();
+    accounts.add_external(&store, &octocat(), "Octo_2").unwrap();
+    assert_eq!(accounts.external.len(), 1);
+    assert_eq!(accounts.external_for("octo_2").unwrap().id, "583231");
+    accounts.remove_external(&store, "Octo_2").unwrap();
+    assert!(store.get("github:583231").unwrap().is_none());
+    // The names stay, but play only once something opens the gate again.
+    assert_eq!(accounts.offline, ["Octo_1", "Octo_2"]);
+    assert!(!accounts.can_play(&store));
+    assert!(launch(&offline(), Some("test-client"), &store, &mut accounts).is_err());
+    // An accounts.json that says so without the keychain item doesn't open it.
+    let mut forged = accounts.clone();
+    forged.external.push(external::External {
+        provider: Provider::Google,
+        id: "1".into(),
+        login: "x".into(),
+        name: "Octo_1".into(),
+    });
+    assert!(!forged.can_play(&store));
 }

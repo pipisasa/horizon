@@ -1,7 +1,7 @@
 //! The owner gate in the window (`horizon_launcher::account::launch`): the screen that asks for a
 //! Microsoft account that owns Minecraft: Java Edition. It covers the launcher once for players
 //! without one (those who played offline before the gate), and again whenever Play is refused.
-//! The sign-in runs on it, code and all.
+//! The sign-in runs on it, code and all; GitHub and Google open it for offline play.
 use super::*;
 
 impl Launcher {
@@ -45,6 +45,7 @@ impl Launcher {
     pub(crate) fn owner_screen(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let configured = account::client_id().is_some();
+        let external = Provider::ALL.into_iter().any(Provider::configured);
         let mut body = div()
             .flex()
             .flex_col()
@@ -59,30 +60,18 @@ impl Launcher {
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
             )))
+            .when(external, |d| {
+                d.child(text(theme::UI).text_color(t.muted).child(tr(
+                    "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.",
+                )))
+            })
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Your worlds, offline names and settings stay where they are.",
             )));
-        let status = match &self.sign_in_state {
-            _ if !configured => Some(div().child(tr(account::NOT_CONFIGURED))),
-            Some(SignInState::Starting) => Some(div().child(tr("Asking Microsoft…"))),
-            Some(SignInState::Code(code)) => Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(trf(
-                        "Open {link} in your browser and enter this code:",
-                        &[("link", &code.verification_uri)],
-                    ))
-                    .child(
-                        text(theme::HEADING)
-                            .font_family(theme::MONO)
-                            .text_color(t.ink)
-                            .child(code.user_code.clone()),
-                    ),
-            ),
-            Some(SignInState::Done(Err(e))) => Some(div().text_color(t.danger).child(e.clone())),
-            Some(SignInState::Done(Ok(_))) | None => None,
+        let status = match self.sign_in_status(cx) {
+            _ if !configured && !external => Some(div().child(tr(account::NOT_CONFIGURED))),
+            Some(_) if matches!(self.sign_in_state, Some(SignInState::Done(Ok(_)))) => None,
+            status => status,
         };
         body = body.children(status.map(|s| {
             plate(&t)
@@ -124,16 +113,19 @@ impl Launcher {
                             .on_click(move |_, _, cx| cx.open_url(&uri)),
                     )
             }
-            Some(SignInState::Starting) => answers,
-            _ if !configured => answers,
-            _ => answers.child(
-                button("owner-sign-in", "Sign in", Kind::Primary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
-                        cx.notify();
-                    },
-                )),
-            ),
+            Some(SignInState::Starting | SignInState::ChooseName(_)) => answers,
+            _ if !configured && !external => answers,
+            _ => answers
+                .child(self.external_sign_in_buttons("owner-sign-in", cx))
+                .when(configured, |d| {
+                    d.child(
+                        button("owner-sign-in", "Sign in with Microsoft", Kind::Primary, &t)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.sign_in_to_play();
+                                cx.notify();
+                            })),
+                    )
+                }),
         };
         let card = plate(&t)
             .flex()

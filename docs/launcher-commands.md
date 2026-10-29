@@ -111,9 +111,12 @@ MCP: `account_list`.
 
 ## `horizon-launcher account sign-in`
 
-Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition.
+Sign in in your browser (device code): with a Microsoft account (Play needs one that owns Minecraft: Java Edition), or with GitHub or Google to play offline under a name you choose.
 
     horizon-launcher account sign-in
+
+- `--with`: microsoft, github or google
+- `--name`: GitHub and Google: the offline name to play under (3 to 16 letters, digits or _). Default: asked once you are signed in
 
 MCP: `account_sign_in`.
 

@@ -52,7 +52,7 @@
   "Another account": "Un autre compte",
   "Microsoft account · plays": "Compte Microsoft · joue",
   "Microsoft account · signed in": "Compte Microsoft · connecté",
-  "Asking Microsoft…": "Demande à Microsoft…",
+  "Asking {service}…": "Demande à {service}…",
   "Add another account.": "Ajoutez un autre compte.",
   "Copy code": "Copier le code",
   "Open link": "Ouvrir le lien",
@@ -159,8 +159,8 @@
   "Prepared for Minecraft {version}": "Préparé pour Minecraft {version}",
   "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "Préparé pour Minecraft {version}, sans ses sons : le jeu sera muet. Préparez à nouveau pour les copier depuis votre installation de Minecraft.",
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "Cette version du launcher n'a pas de connexion Microsoft (HORIZON_MSA_CLIENT_ID) : elle ne peut pas lancer le jeu.",
-  "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Connectez-vous avec un compte Microsoft qui possède Minecraft: Java Edition pour jouer",
-  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Horizon a besoin d'un compte Microsoft qui possède Minecraft: Java Edition, comme les autres launchers. Il permet aussi de jouer sur les serveurs en ligne avec votre nom et votre skin.",
+  "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline": "Connectez-vous avec un compte Microsoft qui possède Minecraft: Java Edition, ou avec GitHub ou Google pour jouer hors ligne",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin. GitHub and Google play offline only.": "Horizon a besoin d'un compte Microsoft qui possède Minecraft: Java Edition, comme les autres launchers. Il permet aussi de jouer sur les serveurs en ligne avec votre nom et votre skin. GitHub et Google ne permettent de jouer que hors ligne.",
   "Sign in": "Se connecter",
   "Sign in with Microsoft": "Se connecter avec Microsoft",
   "Not now": "Pas maintenant",
@@ -185,5 +185,12 @@
   "These mods will run with full access to your computer": "Ces mods auront un accès complet à votre ordinateur",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Ils peuvent lire, modifier ou supprimer vos fichiers, et utiliser vos comptes et votre réseau, comme tout programme que vous lancez. Ne les compilez que si vous faites confiance à leurs auteurs : la page Mods les nomme.",
   "Mods: {mods}": "Mods : {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite."
+  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite.",
+  "Offline · GitHub": "Hors ligne · GitHub",
+  "Offline · Google": "Hors ligne · Google",
+  "Signed in to {service} as {login}. Choose the offline name you play under:": "Connecté à {service} en tant que {login}. Choisissez le nom hors ligne sous lequel vous jouez :",
+  "Play as this name": "Jouer sous ce nom",
+  "offline · plays": "hors ligne · joue",
+  "offline": "hors ligne",
+  "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.": "Ou connectez-vous avec GitHub ou Google pour jouer hors ligne : en LAN et sur les serveurs en mode hors ligne, sous le nom de votre choix."
 }

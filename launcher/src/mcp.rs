@@ -45,7 +45,10 @@ fn session_tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 2000, "description": "How many lines (default 50)." } } } },
         { "name": "server_stop", "description": "Stop the server started with server cleanly (it saves the world), killing it if it does not stop within 30 seconds.", "inputSchema": none },
         { "name": "account_list", "description": "The Microsoft accounts signed in to the launcher (names and UUIDs, never tokens), which one the game plays as (none = offline), and how a sign-in started with account_sign_in is going. CLI: horizon-launcher account list", "inputSchema": none },
-        { "name": "account_sign_in", "description": "Start signing in a Microsoft account: returns a link and a code the player enters in their browser. The sign-in finishes in the background; check it with account_list. Only when the player asks to sign in. CLI: horizon-launcher account sign-in", "inputSchema": none },
+        { "name": "account_sign_in", "description": "Start signing in: returns a link and a code the player enters in their browser. The sign-in finishes in the background; check it with account_list. Microsoft (the default) plays online and opens Play for an account that owns Minecraft: Java Edition; GitHub and Google play offline only, under an offline name the player chooses (ask them first). Only when the player asks to sign in. CLI: horizon-launcher account sign-in",
+          "inputSchema": { "type": "object", "properties": {
+            "provider": { "type": "string", "enum": ["microsoft", "github", "google"], "description": "Who to sign in with. Default: microsoft." },
+            "name": { "type": "string", "description": "GitHub and Google: the offline name the player chose to play under (3 to 16 letters, digits or _)." } } } },
     ])
 }
 
@@ -192,7 +195,8 @@ impl Session {
                 let sign_in = self.sign_in.as_ref().map(|s| match s.state() {
                     SignInState::Starting => json!({ "state": "starting" }),
                     SignInState::Code(c) => json!({ "state": "waiting for the player", "link": c.verification_uri, "code": c.user_code }),
-                    SignInState::Done(Ok(a)) => json!({ "state": "signed in", "name": a.name }),
+                    SignInState::ChooseName(who) => json!({ "state": "signed in, no name chosen", "login": who.login }),
+                    SignInState::Done(Ok(name)) => json!({ "state": "signed in", "plays_as": name }),
                     SignInState::Done(Err(e)) => json!({ "state": "failed", "error": e }),
                 });
                 Ok(serde_json::to_string_pretty(&json!({
@@ -202,39 +206,68 @@ impl Session {
                     "keychain": account::store().persistent(),
                     // Play needs an account that owns the game (the owner gate).
                     "owner": accounts.has_owner(account::store()),
+                    // Or a GitHub or Google sign-in, which plays offline.
+                    "can_play": accounts.can_play(account::store()),
+                    "external": accounts.external.iter().map(|e| json!({ "provider": e.provider.key(), "login": e.login, "name": e.name })).collect::<Vec<_>>(),
                     "sign_in": sign_in,
                 }))
                 .unwrap())
             }
             "account_sign_in" => {
-                account::client_id().ok_or(account::NOT_CONFIGURED)?;
+                let sign_in = match arg_str(args, "provider").unwrap_or("microsoft") {
+                    "microsoft" => {
+                        account::client_id().ok_or(account::NOT_CONFIGURED)?;
+                        SignIn::start
+                    }
+                    other => {
+                        let provider = account::external::Provider::parse(other)
+                            .ok_or("provider is microsoft, github or google")?;
+                        if !provider.configured() {
+                            return Err(provider.not_configured());
+                        }
+                        // The player chooses the offline name, so the agent asks before.
+                        let name = arg_str(args, "name")
+                            .filter(|n| account::valid_offline_name(n))
+                            .ok_or("GitHub and Google play offline: ask the player for the name to play under (3 to 16 letters, digits or _) and pass it as name.")?
+                            .to_string();
+                        if let Some(s) = self.sign_in.take() {
+                            s.cancel();
+                        }
+                        return self.wait_for_code(SignIn::start_external(provider, Some(name)));
+                    }
+                };
                 if let Some(s) = self.sign_in.take() {
                     s.cancel();
                 }
-                let sign_in = SignIn::start();
-                let deadline = std::time::Instant::now() + Duration::from_secs(30);
-                let state = loop {
-                    match sign_in.state() {
-                        SignInState::Starting if std::time::Instant::now() < deadline => {
-                            std::thread::sleep(Duration::from_millis(100))
-                        }
-                        state => break state,
-                    }
-                };
-                self.sign_in = Some(sign_in);
-                match state {
-                    SignInState::Code(c) => Ok(format!(
-                        "Ask the player to open {} and enter the code {}. Then check accounts.",
-                        c.verification_uri, c.user_code
-                    )),
-                    SignInState::Done(Err(e)) => Err(e),
-                    _ => Err("Microsoft did not answer. Try again.".into()),
-                }
+                self.wait_for_code(sign_in())
             }
             _ => match cli_tools::all().into_iter().find(|t| t.name == name) {
                 Some(tool) => tool.call(args),
                 None => Err(format!("Unknown tool {name}")),
             },
+        }
+    }
+
+    /// Keeps `sign_in` going and says what the player enters, once its code is there.
+    fn wait_for_code(&mut self, sign_in: SignIn) -> Result<String, String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let state = loop {
+            match sign_in.state() {
+                SignInState::Starting if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                state => break state,
+            }
+        };
+        let service = sign_in.service;
+        self.sign_in = Some(sign_in);
+        match state {
+            SignInState::Code(c) => Ok(format!(
+                "Ask the player to open {} and enter the code {}. Then check accounts.",
+                c.verification_uri, c.user_code
+            )),
+            SignInState::Done(Err(e)) => Err(e),
+            _ => Err(format!("{service} did not answer. Try again.")),
         }
     }
 

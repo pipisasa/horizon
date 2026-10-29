@@ -52,7 +52,7 @@
   "Another account": "Другой аккаунт",
   "Microsoft account · plays": "Аккаунт Microsoft · играет",
   "Microsoft account · signed in": "Аккаунт Microsoft · вход выполнен",
-  "Asking Microsoft…": "Запрос к Microsoft…",
+  "Asking {service}…": "Запрос к {service}…",
   "Add another account.": "Добавьте ещё один аккаунт.",
   "Copy code": "Скопировать код",
   "Open link": "Открыть ссылку",
@@ -159,8 +159,8 @@
   "Prepared for Minecraft {version}": "Подготовлено для Minecraft {version}",
   "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "Подготовлено для Minecraft {version}, но без звуков: игра будет беззвучной. Подготовьте заново, чтобы скопировать их из вашей установки Minecraft.",
   "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "В этой сборке лаунчера нет входа через Microsoft (HORIZON_MSA_CLIENT_ID), поэтому она не может запустить игру.",
-  "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Чтобы играть, войдите в аккаунт Microsoft, у которого есть Minecraft: Java Edition",
-  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Как и другим лаунчерам, Horizon нужен аккаунт Microsoft, у которого есть Minecraft: Java Edition. С ним вы также играете на онлайн-серверах под своим именем и со своим скином.",
+  "Sign in with a Microsoft account that owns Minecraft: Java Edition, or with GitHub or Google to play offline": "Чтобы играть, войдите в аккаунт Microsoft, у которого есть Minecraft: Java Edition, или через GitHub или Google, чтобы играть офлайн",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin. GitHub and Google play offline only.": "Как и другим лаунчерам, Horizon нужен аккаунт Microsoft, у которого есть Minecraft: Java Edition. С ним вы также играете на онлайн-серверах под своим именем и со своим скином. GitHub и Google дают играть только офлайн.",
   "Sign in": "Войти",
   "Sign in with Microsoft": "Войти через Microsoft",
   "Not now": "Не сейчас",
@@ -185,5 +185,12 @@
   "These mods will run with full access to your computer": "Эти моды получат полный доступ к вашему компьютеру",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Они могут читать, изменять и удалять ваши файлы, использовать ваши аккаунты и сеть, как любая запущенная вами программа. Собирайте их, только если доверяете авторам: они указаны на странице «Моды».",
   "Mods: {mods}": "Моды: {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Сборка компилирует игру: около десяти минут и несколько ГБ на диске в первый раз, потом несколько минут."
+  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Сборка компилирует игру: около десяти минут и несколько ГБ на диске в первый раз, потом несколько минут.",
+  "Offline · GitHub": "Офлайн · GitHub",
+  "Offline · Google": "Офлайн · Google",
+  "Signed in to {service} as {login}. Choose the offline name you play under:": "Вы вошли в {service} как {login}. Выберите офлайн-имя, под которым будете играть:",
+  "Play as this name": "Играть под этим именем",
+  "offline · plays": "офлайн · играет",
+  "offline": "офлайн",
+  "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.": "Или войдите через GitHub или Google, чтобы играть офлайн: по LAN и на серверах в офлайн-режиме, под выбранным именем."
 }

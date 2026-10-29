@@ -47,10 +47,12 @@ pub(super) enum Field {
     /// Settings' new offline name (`switch_page.rs`).
     OfflineName,
     DeleteServer,
+    /// The offline name a GitHub or Google sign-in plays under (`main.rs`).
+    ExternalName,
 }
 
 impl Field {
-    const ALL: [Field; 19] = [
+    const ALL: [Field; 20] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -70,6 +72,7 @@ impl Field {
         Field::LaunchEnv,
         Field::OfflineName,
         Field::DeleteServer,
+        Field::ExternalName,
     ];
 }
 
@@ -1083,6 +1086,7 @@ impl Launcher {
             | Field::DeleteServer => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
             Field::OfflineName => self.offline_name_enter(),
+            Field::ExternalName => self.choose_external_name(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }

@@ -1335,6 +1335,12 @@ fn download_for(
                 format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
             })
         }
+        // Past the gate with no Microsoft account to ask: a GitHub or Google sign-in (offline only),
+        // or the developer option.
+        Ok(account::Launch { offline: None, .. }) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs a Microsoft account that owns Minecraft: Java \
+             Edition; GitHub and Google sign-ins play offline only."
+        )),
         // An owner by its last answer, who can't be asked now.
         Ok(pass) => Err(format!(
             "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
@@ -2331,9 +2337,12 @@ pub fn exe_path() -> &'static Path {
     EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from(LAUNCHER_BINARY)))
 }
 
-/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
+/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves; set at build
+/// time (a fork's `.env`), it keeps a build from being replaced by upstream's releases.
 pub fn self_update_allowed() -> bool {
-    !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
+    !cfg!(debug_assertions)
+        && option_env!("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none_or(str::is_empty)
+        && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
 }
 
 /// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
