@@ -108,13 +108,20 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
-    /// Minecraft: Java Edition
+    /// Sign in in your browser (device code): with a Microsoft account (Play needs one that owns
+    /// Minecraft: Java Edition), or with GitHub or Google to play offline under a name you choose
     SignIn {
         /// Sign this account (name or UUID) in again: another Microsoft account is refused and
         /// who plays stays the same
         #[arg(long = "for")]
         target: Option<String>,
+        /// microsoft, github or google
+        #[arg(long = "with", default_value = "microsoft")]
+        provider: String,
+        /// GitHub and Google: the offline name to play under (3 to 16 letters, digits or _).
+        /// Default: asked once you are signed in
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Renew an account's session now, even when its access token is still fresh
     Refresh { who: String },
@@ -1906,20 +1913,28 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
                         "name": a.name, "uuid": a.uuid,
-                        "selected": accounts.selected.as_ref() == Some(&a.uuid),
+                        "selected": accounts.external_selected.is_none() && accounts.selected.as_ref() == Some(&a.uuid),
                         "authentication": account::session::status(account::store(), &a.uuid),
+                    })).collect::<Vec<_>>(),
+                    "external": accounts.external.iter().map(|e| serde_json::json!({
+                        "provider": e.provider.key(), "login": e.login, "name": e.name,
+                        "selected": accounts.external_selected.as_deref() == Some(e.name.as_str()),
+                        "signed_in": account::external::signed_in(account::store(), e),
                     })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
                     "owner": accounts.has_owner(account::store()),
+                    "can_play": accounts.can_play(account::store()),
                 }));
-            } else if accounts.accounts.is_empty() {
+            } else if accounts.accounts.is_empty() && accounts.external.is_empty() {
                 println!(
                     "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
                      Edition: horizon-launcher account sign-in"
                 );
             } else {
                 for a in &accounts.accounts {
-                    let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
+                    let mark = if accounts.external_selected.is_none()
+                        && accounts.selected.as_ref() == Some(&a.uuid)
+                    {
                         "*"
                     } else {
                         " "
@@ -1932,7 +1947,17 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     };
                     println!("{mark} {}  {}  {}{why}", a.name, a.uuid, status.label());
                 }
-                if !accounts.has_owner(account::store()) {
+                for e in &accounts.external {
+                    let on = accounts.external_selected.as_deref() == Some(e.name.as_str());
+                    println!(
+                        "{} {}  offline, {} {}",
+                        if on { "*" } else { " " },
+                        e.name,
+                        e.provider.label(),
+                        e.login
+                    );
+                }
+                if !accounts.can_play(account::store()) {
                     println!(
                         "{} {}",
                         account::NoOwner::default(),
@@ -1960,7 +1985,16 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 (Err(status), false) => return Err(status.message),
             }
         }
-        AccountCmd::SignIn { target: Some(who) } => {
+        AccountCmd::SignIn {
+            target: Some(_),
+            provider,
+            ..
+        } if provider != "microsoft" => {
+            return Err("--for signs a Microsoft account in again: leave out --with".into());
+        }
+        AccountCmd::SignIn {
+            target: Some(who), ..
+        } => {
             let a = find(&accounts, &who)?;
             let sign_in = account::SignIn::start_for(a.clone());
             let mut shown = false;
@@ -1991,7 +2025,59 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 println!("Signed in as {} again.", signed_in.name);
             }
         }
-        AccountCmd::SignIn { target: None } => {
+        AccountCmd::SignIn {
+            target: None,
+            provider,
+            name,
+        } if provider != "microsoft" => {
+            use account::external;
+            let provider = external::Provider::parse(&provider)
+                .ok_or_else(|| format!("{provider}: sign in with microsoft, github or google"))?;
+            if !provider.configured() {
+                return Err(provider.not_configured());
+            }
+            if let Some(name) = &name {
+                if !account::external::valid_name(name) {
+                    return Err(format!(
+                        "{name}: an offline name is 3 to 16 letters, digits or _"
+                    ));
+                }
+            }
+            let ep = external::Endpoints::live();
+            let code = external::device_code(&ep, provider)?;
+            eprintln!(
+                "To sign in, open {} in a browser and enter the code {}",
+                code.verification_uri, code.user_code
+            );
+            let who = external::wait_for_identity(&ep, provider, &code, &|| false)?;
+            let name = match name {
+                Some(name) => name,
+                None => {
+                    let suggested = who.suggested_name();
+                    eprint!(
+                        "Signed in to {} as {}. The offline name to play under [{suggested}]: ",
+                        provider.label(),
+                        who.login
+                    );
+                    let mut line = String::new();
+                    let _ = std::io::stdin().read_line(&mut line);
+                    match line.trim() {
+                        "" => suggested,
+                        typed => typed.to_string(),
+                    }
+                }
+            };
+            let name = accounts.add_external(account::store(), &who, &name)?;
+            accounts.save()?;
+            println!(
+                "Signed in with {}: the game plays offline as {name}.",
+                provider.label()
+            );
+            if !account::store().persistent() {
+                eprintln!("{}", account::NO_KEYCHAIN);
+            }
+        }
+        AccountCmd::SignIn { target: None, .. } => {
             let client_id = account::client_id().ok_or(account::NOT_CONFIGURED)?;
             let ep = account::Endpoints::live();
             let code = account::device_code(&ep, &client_id)?;
@@ -2008,11 +2094,21 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 eprintln!("{said}");
             }
         }
+        AccountCmd::SignOut { who } if accounts.external_for(&who).is_some() => {
+            accounts.remove_external(account::store(), &who)?;
+            accounts.save()?;
+            println!("Signed out {who}.");
+        }
         AccountCmd::SignOut { who } => {
             let a = find(&accounts, &who)?;
             accounts.remove(account::store(), &a.uuid)?;
             accounts.save()?;
             println!("Signed out {}.", a.name);
+        }
+        AccountCmd::Select { who } if accounts.external_for(&who).is_some() => {
+            accounts.play_external(&who)?;
+            accounts.save()?;
+            println!("The game plays offline as {who}.");
         }
         AccountCmd::Select { who } => {
             let a = find(&accounts, &who)?;

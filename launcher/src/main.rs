@@ -85,6 +85,7 @@ use gpui::{
     KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions, Pixels, Point,
     SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
+use horizon_launcher::account::external::Provider;
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::build_import;
@@ -770,7 +771,7 @@ impl Launcher {
         std::thread::spawn(move || {
             let store = account::store();
             let _ = keychain_tx.send(Msg::Keychain(account::no_keychain()));
-            let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
+            let _ = keychain_tx.send(Msg::Owner(accounts.can_play(store)));
         });
         std::thread::spawn(move || {
             let reused = backend::reuse_prepared_everywhere();
@@ -1232,7 +1233,12 @@ impl Launcher {
                     self.load_auth_statuses(false);
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
-                        let account::GameSession { file, offline, env } = match session {
+                        let account::GameSession {
+                            file,
+                            offline,
+                            env,
+                            name,
+                        } = match session {
                             Ok(pass) => pass,
                             Err(refused) => {
                                 // A keyring that didn't answer isn't a missing owner (#12179).
@@ -1250,6 +1256,10 @@ impl Launcher {
                         self.owner = Some(true);
                         if let Some(file) = file {
                             cmd.arg("--session-file").arg(file);
+                        }
+                        // A GitHub or Google account plays offline under its own name.
+                        if let Some(name) = name {
+                            cmd.arg("--name").arg(name);
                         }
                         cmd.envs(env);
                         // Still play, offline, and say why.
@@ -1582,20 +1592,20 @@ impl Launcher {
         changed |= self.toast_tick();
         if let Some(sign_in) = &self.sign_in {
             if let Some(state) = sign_in_change(&mut self.sign_in_state, sign_in.state()) {
-                if let SignInState::Done(Ok(ref account)) = state {
-                    self.auth_busy.remove(&account.uuid);
-                    self.sign_in_target = None;
-                    self.accounts = Accounts::load();
-                    self.load_profile_heads();
-                    self.load_auth_statuses(false);
-                    // Sign-in refuses accounts that don't own the game.
-                    self.owner = Some(true);
-                    self.owner_screen_open = false;
-                    self.client_error = None;
-                    if !self.settings.owner_notice_seen {
-                        self.settings.owner_notice_seen = true;
-                        self.save_settings();
+                match &state {
+                    SignInState::Done(Ok(account)) => {
+                        self.auth_busy.remove(&account.uuid);
+                        self.sign_in_target = None;
+                        self.signed_in();
                     }
+                    SignInState::Offline(_) => self.signed_in(),
+                    // The offline name to play under: the provider's, until the player types.
+                    SignInState::ChooseName(who) => {
+                        self.servers
+                            .text(servers_page::Field::ExternalName)
+                            .set(who.suggested_name());
+                    }
+                    _ => {}
                 }
                 changed = true;
             }
@@ -2050,6 +2060,163 @@ impl Launcher {
         }
         self.sign_in_state = None;
         self.sign_in_target = None;
+    }
+
+    /// Starts a GitHub or Google sign-in; the name to play under is asked once it is through.
+    fn start_external_sign_in(&mut self, provider: Provider) {
+        self.cancel_sign_in();
+        self.sign_in = Some(SignIn::start_external(provider, None));
+        self.sign_in_state = Some(SignInState::Starting);
+    }
+
+    /// A GitHub or Google sign-in through: keeps it under the name typed, which plays now.
+    fn choose_external_name(&mut self) {
+        let Some(SignInState::ChooseName(who)) = self.sign_in_state.clone() else {
+            return;
+        };
+        let name = self
+            .servers
+            .value(servers_page::Field::ExternalName)
+            .trim()
+            .to_string();
+        let mut accounts = Accounts::load();
+        match accounts
+            .add_external(account::store(), &who, &name)
+            .and_then(|name| accounts.save().map(|()| name))
+        {
+            Ok(name) => {
+                self.sign_in = None;
+                self.sign_in_state = Some(SignInState::Offline(name));
+                self.servers.text(servers_page::Field::ExternalName).take();
+                self.signed_in();
+            }
+            // The name was refused: the field stays for another one.
+            Err(e) => self.client_error = Some(e),
+        }
+    }
+
+    /// After a sign-in: the accounts again, and the gate is open (sign-in refuses Microsoft
+    /// accounts that don't own the game; GitHub and Google open it for offline play).
+    fn signed_in(&mut self) {
+        self.accounts = Accounts::load();
+        self.load_profile_heads();
+        self.load_auth_statuses(false);
+        self.owner = Some(true);
+        self.owner_screen_open = false;
+        self.client_error = None;
+        if !self.settings.owner_notice_seen {
+            self.settings.owner_notice_seen = true;
+            self.save_settings();
+        }
+    }
+
+    /// What a sign-in under way shows: its code, or the name field once GitHub or Google is
+    /// through; none when there is nothing to show.
+    fn sign_in_status(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let t = self.theme;
+        let service = self.sign_in.as_ref().map_or("Microsoft", |s| s.service);
+        let state = self.sign_in_state.clone();
+        Some(match &state {
+            Some(SignInState::Starting) => {
+                div().child(trf("Asking {service}…", &[("service", service)]))
+            }
+            Some(SignInState::Working(phase)) => div().child(tr(phase.label())),
+            Some(SignInState::Code(code)) => div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(trf(
+                    "Open {link} in your browser and enter this code:",
+                    &[("link", &code.verification_uri)],
+                ))
+                .child(
+                    text(theme::HEADING)
+                        .font_family(theme::MONO)
+                        .text_color(t.ink)
+                        .child(code.user_code.clone()),
+                )
+                // Only Microsoft keeps who is signed in across accounts.
+                .when(service == "Microsoft", |col| {
+                    let uri = code.verification_uri.clone();
+                    col.when(!microsoft::has_private_window(), |col| {
+                        col.child(tr(
+                            "Open this link in a private window to pick another account.",
+                        ))
+                    })
+                    .child(
+                        div().flex().child(
+                            button(
+                                "sign-in-other",
+                                "Use a different Microsoft account",
+                                Kind::Ghost,
+                                &t,
+                            )
+                            .on_click(move |_, _, cx| microsoft::use_different_account(&uri, cx)),
+                        ),
+                    )
+                }),
+            Some(SignInState::ChooseName(who)) => div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(trf(
+                    "Signed in to {service} as {login}. Choose the offline name you play under:",
+                    &[("service", who.provider.label()), ("login", &who.login)],
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(self.field(
+                            servers_page::Field::ExternalName,
+                            tr("A name, 3 to 16 letters"),
+                            220.,
+                            cx,
+                        ))
+                        .child(
+                            button("external-name", "Play as this name", Kind::Primary, &t)
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.choose_external_name();
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .children(
+                    self.client_error
+                        .clone()
+                        .map(|e| div().text_color(t.danger).child(e)),
+                ),
+            Some(SignInState::Done(Ok(a))) => {
+                div().child(trf("Signed in as {name}.", &[("name", &a.name)]))
+            }
+            Some(SignInState::Offline(name)) => {
+                div().child(trf("Signed in, playing as {name}.", &[("name", name)]))
+            }
+            Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
+            None => return None,
+        })
+    }
+
+    /// A button for each GitHub or Google sign-in this build has.
+    fn external_sign_in_buttons(&self, id: &str, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        div()
+            .flex()
+            .gap(px(4.))
+            .children(
+                Provider::ALL
+                    .into_iter()
+                    .filter(|p| p.configured())
+                    .map(|p| {
+                        button(format!("{id}-{}", p.key()), p.label(), Kind::Secondary, &t)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.owner_screen_open |= this.owner == Some(false);
+                                this.start_external_sign_in(p);
+                                cx.notify();
+                            }))
+                    }),
+            )
     }
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
@@ -4398,6 +4565,61 @@ impl Launcher {
     fn account_rows(&mut self, cx: &mut Context<Self>) -> (Div, usize) {
         let t = self.theme;
         let (mut rows, mut n) = self.microsoft_rows(cx);
+        // GitHub and Google accounts, by the offline name each plays under.
+        let now = self.playing_key();
+        for (i, e) in self.accounts.external.clone().into_iter().enumerate() {
+            let plays = now.as_deref() == Some(e.name.as_str());
+            let mut actions = div().flex().gap(px(4.));
+            if !plays {
+                let who = e.name.clone();
+                actions = actions.child(
+                    button(format!("external-play-{i}"), "Play as", Kind::Secondary, &t).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.play_as(&who);
+                            cx.notify();
+                        }),
+                    ),
+                );
+            }
+            let name = e.name.clone();
+            actions = actions.child(
+                button(
+                    format!("external-sign-out-{i}"),
+                    "Sign out",
+                    Kind::Ghost,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let mut accounts = Accounts::load();
+                    match accounts
+                        .remove_external(account::store(), &name)
+                        .and_then(|()| accounts.save())
+                    {
+                        Ok(()) => this.accounts = accounts,
+                        Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
+                    }
+                    this.owner = Some(this.accounts.can_play(account::store()));
+                    cx.notify();
+                })),
+            );
+            n += 1;
+            rows = rows.child(index_row(
+                n,
+                e.name.clone(),
+                Some(
+                    div()
+                        .child(format!(
+                            "{} {} · {}",
+                            e.provider.label(),
+                            e.login,
+                            tr(if plays { "offline · plays" } else { "offline" })
+                        ))
+                        .into_any_element(),
+                ),
+                Some(actions.into_any_element()),
+                &t,
+            ));
+        }
         n += 1;
         let (title, detail, action) = self.sign_in_parts(cx);
         rows = rows.child(index_row(
@@ -4416,7 +4638,7 @@ impl Launcher {
         let t = self.theme;
         let mut rows = div().flex().flex_col();
         let mut n = 0;
-        let selected = self.accounts.selected.clone();
+        let selected = self.playing_key();
         for (i, a) in self.accounts.accounts.clone().into_iter().enumerate() {
             let plays = selected.as_ref() == Some(&a.uuid);
             let uuid = a.uuid.clone();
@@ -4505,7 +4727,7 @@ impl Launcher {
                         let result = accounts
                             .remove(account::store(), &uuid)
                             .and_then(|()| accounts.save())
-                            .map(|()| accounts.has_owner(account::store()));
+                            .map(|()| accounts.can_play(account::store()));
                         let _ = tx.send(Msg::AccountRemoved(uuid, generation, result));
                     });
                     cx.notify();
@@ -4539,52 +4761,24 @@ impl Launcher {
 
     /// Adding a Microsoft account, or signing one in again: what the row is called, what is
     /// happening (the code to enter, a problem), and its buttons.
-    fn sign_in_parts(&self, cx: &mut Context<Self>) -> (String, Div, Option<AnyElement>) {
+    fn sign_in_parts(&mut self, cx: &mut Context<Self>) -> (String, Div, Option<AnyElement>) {
         let t = self.theme;
         let configured = account::client_id().is_some();
+        let external = Provider::ALL.into_iter().any(Provider::configured);
         let busy = matches!(
             self.sign_in_state,
-            Some(SignInState::Starting | SignInState::Code(_) | SignInState::Working(_))
+            Some(
+                SignInState::Starting
+                    | SignInState::Code(_)
+                    | SignInState::Working(_)
+                    | SignInState::ChooseName(_)
+            )
         );
-        let detail = match &self.sign_in_state {
-            _ if !configured => div().child(tr(account::NOT_CONFIGURED)),
-            Some(SignInState::Starting) => div().child(tr("Asking Microsoft…")),
-            Some(SignInState::Working(phase)) => div().child(tr(phase.label())),
-            Some(SignInState::Code(code)) => div()
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(trf(
-                    "Open {link} in your browser and enter this code:",
-                    &[("link", &code.verification_uri)],
-                ))
-                .child(
-                    text(theme::HEADING)
-                        .font_family(theme::MONO)
-                        .text_color(t.ink)
-                        .child(code.user_code.clone()),
-                )
-                .when(!microsoft::has_private_window(), |col| {
-                    col.child(tr("Open this link in a private window to pick another account."))
-                })
-                .child({
-                    let uri = code.verification_uri.clone();
-                    div().flex().child(
-                        button(
-                            "sign-in-other",
-                            "Use a different Microsoft account",
-                            Kind::Ghost,
-                            &t,
-                        )
-                        .on_click(move |_, _, cx| microsoft::use_different_account(&uri, cx)),
-                    )
-                }),
-            Some(SignInState::Done(Ok(a))) => {
-                div().child(trf("Signed in as {name}.", &[("name", &a.name)]))
-            }
-            Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
+        let detail = match self.sign_in_status(cx) {
+            _ if !configured && !external => div().child(tr(account::NOT_CONFIGURED)),
+            Some(status) => status,
             None if self.accounts.accounts.is_empty() => div().child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin. GitHub and Google play offline only.",
             )),
             None => div().child(tr("Add another account.")),
         };
@@ -4610,7 +4804,7 @@ impl Launcher {
                 .child(div().child(said)),
             _ => detail,
         };
-        let action = if !configured {
+        let action = if !configured && !external {
             None
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
@@ -4678,16 +4872,21 @@ impl Launcher {
             } else {
                 microsoft::sign_in_button("sign-in", &t)
             };
-            let mut actions = div().flex().gap(px(4.)).child(sign_in.on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    if let Some(uuid) = &target {
-                        this.re_sign_in(uuid);
-                    } else {
-                        this.start_sign_in();
-                    }
-                    cx.notify();
-                },
-            )));
+            let mut actions = div().flex().gap(px(4.)).when(configured, |d| {
+                d.child(
+                    sign_in.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(uuid) = &target {
+                            this.re_sign_in(uuid);
+                        } else {
+                            this.start_sign_in();
+                        }
+                        cx.notify();
+                    })),
+                )
+            });
+            if !targeted {
+                actions = actions.child(self.external_sign_in_buttons("sign-in", cx));
+            }
             if targeted {
                 actions = actions.child(
                     button("sign-in-cancel-target", "Cancel", Kind::Ghost, &t).on_click(

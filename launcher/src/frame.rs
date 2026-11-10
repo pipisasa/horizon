@@ -795,7 +795,7 @@ impl Launcher {
         }
         let t = self.theme;
         let soft = self.look.accent_soft;
-        let now = self.accounts.selected().map(|a| a.uuid.clone());
+        let now = self.playing_key();
         let mut menu = ui::popover(250.)
             .id("account-menu")
             .occlude()

@@ -64,10 +64,12 @@ pub(super) enum Field {
     AccentHex,
     /// The Shop's gift recipient (`wardrobe_page/shop/basket.rs`).
     ShopGift,
+    /// The offline name a GitHub or Google sign-in plays under (`main.rs`).
+    ExternalName,
 }
 
 impl Field {
-    const ALL: [Field; 24] = [
+    const ALL: [Field; 25] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -92,6 +94,7 @@ impl Field {
         Field::DeleteServer,
         Field::AccentHex,
         Field::ShopGift,
+        Field::ExternalName,
     ];
 }
 
@@ -1285,6 +1288,7 @@ impl Launcher {
             }
             Field::MemoryLimit => self.memory_enter(),
             Field::ShopGift => self.shop.find_soon = true,
+            Field::ExternalName => self.choose_external_name(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }

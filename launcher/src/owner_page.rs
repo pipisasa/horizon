@@ -1,7 +1,7 @@
 //! The owner gate in the window (`horizon_launcher::account::launch`): the screen that asks for a
 //! Microsoft account that owns Minecraft: Java Edition. It covers the launcher once for players
 //! without one (those who played offline before the gate), and again whenever Play is refused.
-//! The sign-in runs on it, code and all.
+//! The sign-in runs on it, code and all; GitHub and Google open it for offline play.
 use super::*;
 
 impl Launcher {
@@ -34,18 +34,31 @@ impl Launcher {
         let t = self.theme;
         let n = t.night;
         let configured = account::client_id().is_some();
+        let external = Provider::ALL.into_iter().any(Provider::configured);
+        let service = self.sign_in.as_ref().map_or("Microsoft", |s| s.service);
+        // The name field once GitHub or Google is through (it needs `self` mutably).
+        let choose = matches!(self.sign_in_state, Some(SignInState::ChooseName(_)))
+            .then(|| self.sign_in_status(cx))
+            .flatten();
         // The screenshot preview shows a code without asking Microsoft for one.
         let state = match &self.sign_in_state {
-            _ if sign_in_preview() => Shown::Code("https://www.microsoft.com/link", "K7Q-4MXR"),
-            _ if !configured => Shown::Error(tr(account::NOT_CONFIGURED)),
-            Some(SignInState::Starting) => Shown::Starting("Asking Microsoft…"),
-            Some(SignInState::Working(phase)) => Shown::Starting(phase.label()),
-            Some(SignInState::Code(code)) => Shown::Code(&code.verification_uri, &code.user_code),
+            _ if sign_in_preview() => {
+                Shown::Code("https://www.microsoft.com/link", "K7Q-4MXR", true)
+            }
+            _ if !configured && !external => Shown::Error(tr(account::NOT_CONFIGURED)),
+            Some(SignInState::Starting) => Shown::Starting("Asking {service}…", service),
+            Some(SignInState::Working(phase)) => Shown::Starting(phase.label(), service),
+            Some(SignInState::Code(code)) => Shown::Code(
+                &code.verification_uri,
+                &code.user_code,
+                service == "Microsoft",
+            ),
+            Some(SignInState::ChooseName(_)) => Shown::ChooseName,
             Some(SignInState::Done(Err(e))) => Shown::Error(e),
-            Some(SignInState::Done(Ok(_))) | None => Shown::Idle,
+            Some(SignInState::Done(Ok(_)) | SignInState::Offline(_)) | None => Shown::Idle,
         };
         if crate::glass_ui::on() {
-            return self.glass_owner_screen(state, configured, cx);
+            return self.glass_owner_screen(state, configured, external, choose, cx);
         }
         let line = |s: &str, color: u32| {
             shell::text(theme::night::UI, shell::c(color))
@@ -71,6 +84,12 @@ impl Launcher {
                 "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
                 n.ink_soft,
             ))
+            .when(external, |d| {
+                d.child(line(
+                    "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.",
+                    n.ink_soft,
+                ))
+            })
             .child(line(
                 "No Minecraft install needed: Horizon downloads it from Mojang for your account.",
                 n.ink_soft,
@@ -86,7 +105,7 @@ impl Launcher {
                 .border_color(plate::alpha(n.stroke, n.stroke_alpha))
         };
         body = match state {
-            Shown::Code(uri, user_code) => {
+            Shown::Code(uri, user_code, microsoft) => {
                 let copy = user_code.to_string();
                 let (private_uri, link_uri, other_uri) =
                     (uri.to_string(), uri.to_string(), uri.to_string());
@@ -133,7 +152,8 @@ impl Launcher {
                                 }),
                         ),
                 )
-                .child(
+                .when(microsoft, |body| {
+                    body.child(
                     div()
                         .mt(px(8.))
                         .flex()
@@ -176,10 +196,15 @@ impl Launcher {
                                 ),
                         ),
                 )
+                })
             }
-            Shown::Starting(what) => body.child(raised().child(
-                shell::text(theme::night::UI, shell::c(n.ink_soft)).child(tr(what).to_string()),
-            )),
+            Shown::Starting(what, service) => body.child(
+                raised().child(
+                    shell::text(theme::night::UI, shell::c(n.ink_soft))
+                        .child(trf(what, &[("service", service)])),
+                ),
+            ),
+            Shown::ChooseName => body.child(raised().children(choose)),
             Shown::Error(e) => body.child(
                 raised()
                     .child(shell::text(theme::night::UI, shell::c(n.danger)).child(e.to_string())),
@@ -187,7 +212,7 @@ impl Launcher {
             Shown::Idle => body,
         };
         let main = match state {
-            Shown::Code(uri, _) => {
+            Shown::Code(uri, _, _) => {
                 let uri = uri.to_string();
                 Some(
                     shell::action("owner-open", shell::Action::Main, &t)
@@ -195,8 +220,9 @@ impl Launcher {
                         .on_click(move |_, _, cx| cx.open_url(&uri)),
                 )
             }
-            Shown::Starting(_) => None,
-            Shown::Error(_) if !configured => None,
+            Shown::Starting(..) | Shown::ChooseName => None,
+            Shown::Error(_) if !configured && !external => None,
+            _ if !configured => None,
             _ => Some(
                 microsoft::sign_in_button("owner-sign-in", &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
@@ -206,7 +232,9 @@ impl Launcher {
                 )),
             ),
         };
-        let waiting = matches!(state, Shown::Code(..)).then(|| {
+        let others = (external && matches!(state, Shown::Idle | Shown::Error(_)))
+            .then(|| self.external_sign_in_buttons("owner-sign-in", cx));
+        let waiting = matches!(state, Shown::Code(_, _, true)).then(|| {
             shell::text(theme::night::CAPTION, shell::c(n.muted))
                 .relative()
                 .child(tr("Waiting for Microsoft… the window goes on by itself.").to_string())
@@ -218,6 +246,7 @@ impl Launcher {
             .gap(px(10.))
             .mt(px(14.))
             .children(main)
+            .children(others)
             .child(
                 shell::action("owner-later", shell::Action::Quiet, &t)
                     .child(shell::label(tr("Not now").to_string()))
@@ -269,6 +298,8 @@ impl Launcher {
         &self,
         state: Shown,
         configured: bool,
+        external: bool,
+        choose: Option<Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         use crate::glass_ui::{self as ui, white};
@@ -310,12 +341,17 @@ impl Launcher {
                     .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
                         "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
                     )))
+                    .when(external, |col| {
+                        col.child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
+                            "Or sign in with GitHub or Google to play offline: LAN and offline-mode servers, under a name you choose.",
+                        )))
+                    })
                     .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
                         "No Minecraft install needed: Horizon downloads it from Mojang for your account.",
 ))),
             );
         card = match state {
-            Shown::Code(uri, user_code) => {
+            Shown::Code(uri, user_code, microsoft) => {
                 let copy = user_code.to_string();
                 let (private_uri, link_uri, other_uri) =
                     (uri.to_string(), uri.to_string(), uri.to_string());
@@ -352,60 +388,70 @@ impl Launcher {
                             },
                         )),
                 )
-                .child(
-                    div()
-                        .mt(px(8.))
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap(px(4.))
-                        .when(!microsoft::has_private_window(), |col| {
-                            col.child(ui::text(13., FontWeight::NORMAL, ink::QUIET).child(tr(
-                                "Open this link in a private window to pick another account.",
-                            )))
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(8.))
-                                .child(if microsoft::has_private_window() {
-                                    ui::quiet(
-                                        "owner-private",
-                                        tr("Open in private window"),
-                                        32.,
-                                        &t,
-                                    )
-                                    .on_click(
-                                        move |_, _, cx| microsoft::open_private(&private_uri, cx),
-                                    )
-                                } else {
-                                    ui::quiet("owner-copy-link", tr("Copy link"), 32., &t).on_click(
-                                        move |_, _, cx| {
-                                            copy_to_clipboard(
-                                                cx,
-                                                gpui::ClipboardItem::new_string(link_uri.clone()),
-                                            )
-                                        },
-                                    )
-                                })
-                                .child(
-                                    ui::quiet(
-                                        "owner-other",
-                                        tr("Use a different Microsoft account"),
-                                        32.,
-                                        &t,
-                                    )
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            microsoft::use_different_account(&other_uri, cx)
-                                        },
+                .when(microsoft, |card| {
+                    card.child(
+                        div()
+                            .mt(px(8.))
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap(px(4.))
+                            .when(!microsoft::has_private_window(), |col| {
+                                col.child(ui::text(13., FontWeight::NORMAL, ink::QUIET).child(tr(
+                                    "Open this link in a private window to pick another account.",
+                                )))
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.))
+                                    .child(if microsoft::has_private_window() {
+                                        ui::quiet(
+                                            "owner-private",
+                                            tr("Open in private window"),
+                                            32.,
+                                            &t,
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                microsoft::open_private(&private_uri, cx)
+                                            },
+                                        )
+                                    } else {
+                                        ui::quiet("owner-copy-link", tr("Copy link"), 32., &t)
+                                            .on_click(move |_, _, cx| {
+                                                copy_to_clipboard(
+                                                    cx,
+                                                    gpui::ClipboardItem::new_string(
+                                                        link_uri.clone(),
+                                                    ),
+                                                )
+                                            })
+                                    })
+                                    .child(
+                                        ui::quiet(
+                                            "owner-other",
+                                            tr("Use a different Microsoft account"),
+                                            32.,
+                                            &t,
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                microsoft::use_different_account(&other_uri, cx)
+                                            },
+                                        ),
                                     ),
-                                ),
-                        ),
-                )
+                            ),
+                    )
+                })
             }
-            Shown::Starting(what) => card
-                .child(panel().child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(what)))),
+            Shown::Starting(what, service) => card.child(
+                panel().child(
+                    ui::text(14., FontWeight::NORMAL, ink::BODY)
+                        .child(trf(what, &[("service", service)])),
+                ),
+            ),
+            Shown::ChooseName => card.child(panel().children(choose)),
             Shown::Error(e) => card.child(
                 panel().child(
                     ui::text(14., FontWeight::NORMAL, ink::FULL)
@@ -416,7 +462,7 @@ impl Launcher {
             Shown::Idle => card,
         };
         let main: Option<AnyElement> = match state {
-            Shown::Code(uri, _) => {
+            Shown::Code(uri, _, _) => {
                 let uri = uri.to_string();
                 Some(
                     ui::button(
@@ -431,8 +477,8 @@ impl Launcher {
                     .into_any_element(),
                 )
             }
-            Shown::Starting(_) => None,
-            Shown::Error(_) if !configured => None,
+            Shown::Starting(..) | Shown::ChooseName => None,
+            _ if !configured => None,
             _ => Some(
                 keyboard(
                     div()
@@ -476,9 +522,13 @@ impl Launcher {
                 .gap(px(8.))
                 .mt(px(24.))
                 .children(main)
+                .when(
+                    external && matches!(state, Shown::Idle | Shown::Error(_)),
+                    |row| row.child(self.external_sign_in_buttons("owner-sign-in", cx)),
+                )
                 .child(later),
         );
-        if matches!(state, Shown::Code(..)) {
+        if matches!(state, Shown::Code(_, _, true)) {
             card = card.child(
                 ui::text(13., FontWeight::NORMAL, ink::QUIET)
                     .mt(px(12.))
@@ -514,10 +564,12 @@ impl Launcher {
 #[derive(Clone, Copy)]
 enum Shown<'a> {
     Idle,
-    /// What the sign-in is doing.
-    Starting(&'static str),
-    /// The page and the code to enter there.
-    Code(&'a str, &'a str),
+    /// What the sign-in is doing, and who it asks (`{service}` in it).
+    Starting(&'static str, &'static str),
+    /// The page and the code to enter there; whether Microsoft asks (its account links).
+    Code(&'a str, &'a str, bool),
+    /// GitHub or Google is through: the offline name to play under.
+    ChooseName,
     Error(&'a str),
 }
 

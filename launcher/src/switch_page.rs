@@ -1,19 +1,37 @@
 //! Who plays: the top bar's quick switch (a menu under the account chip) between the signed-in
-//! Microsoft accounts.
+//! Microsoft accounts, and the GitHub and Google accounts that play offline.
 use super::*;
 
 impl Launcher {
     /// The chip's two lines: the name that plays, and how.
     pub(super) fn who_plays(&self) -> (String, &'static str) {
+        if let Some(e) = self.accounts.playing_external() {
+            return (e.name.clone(), external_how(e.provider));
+        }
         match self.accounts.selected() {
             Some(a) => (a.name.clone(), tr("Microsoft account")),
             None => (String::new(), tr("Sign in with Microsoft")),
         }
     }
 
-    pub(super) fn play_as(&mut self, uuid: &str) {
+    /// Who plays, as the quick switch keys them: the GitHub or Google account's name, else the
+    /// selected Microsoft account's UUID.
+    pub(super) fn playing_key(&self) -> Option<String> {
+        match self.accounts.playing_external() {
+            Some(e) => Some(e.name.clone()),
+            None => self.accounts.selected().map(|a| a.uuid.clone()),
+        }
+    }
+
+    /// Plays as `who`: a GitHub or Google account's name, else a Microsoft account's UUID (32
+    /// hex digits, never a name of at most 16).
+    pub(super) fn play_as(&mut self, who: &str) {
         let mut accounts = Accounts::load();
-        let done = accounts.play_as(uuid).and_then(|()| accounts.save());
+        let picked = match accounts.external_for(who) {
+            Some(_) => accounts.play_external(who),
+            None => accounts.play_as(who),
+        };
+        let done = picked.and_then(|()| accounts.save());
         match done {
             Ok(()) => self.accounts = accounts,
             Err(e) => self.sign_in_state = Some(SignInState::Done(Err(e))),
@@ -27,6 +45,12 @@ impl Launcher {
             .accounts
             .iter()
             .map(|a| (a.uuid.clone(), a.name.clone(), tr("Microsoft")))
+            .chain(
+                self.accounts
+                    .external
+                    .iter()
+                    .map(|e| (e.name.clone(), e.name.clone(), external_how(e.provider))),
+            )
             .collect()
     }
 
@@ -36,7 +60,7 @@ impl Launcher {
             return None;
         }
         let t = self.theme;
-        let now = self.accounts.selected().map(|a| a.uuid.clone());
+        let now = self.playing_key();
         let mut menu = div()
             .id("account-menu")
             .absolute()
@@ -109,5 +133,13 @@ impl Launcher {
                 })),
         );
         Some(gpui::deferred(menu).with_priority(1))
+    }
+}
+
+/// How a GitHub or Google account plays: offline, through that sign-in.
+pub(crate) fn external_how(provider: account::external::Provider) -> &'static str {
+    match provider {
+        account::external::Provider::GitHub => tr("Offline · GitHub"),
+        account::external::Provider::Google => tr("Offline · Google"),
     }
 }

@@ -33,18 +33,25 @@ impl Launcher {
     /// The player now.
     fn glass_who_plays(&self) -> Div {
         let t = self.theme;
-        let (uuid, name, status) = match self.accounts.selected() {
-            Some(a) => (
-                Some(a.uuid.clone()),
-                a.name.clone(),
-                (Tone::Live, tr("Microsoft account · online servers too")),
-            ),
-            None => (
-                None,
-                tr("Sign in with Microsoft").to_string(),
-                (Tone::Off, tr(account::NEEDS_OWNER)),
-            ),
-        };
+        let (uuid, name, status) =
+            match (self.accounts.playing_external(), self.accounts.selected()) {
+                // A GitHub or Google account plays offline under its name.
+                (Some(e), _) => (
+                    None,
+                    e.name.clone(),
+                    (Tone::Live, crate::switch_page::external_how(e.provider)),
+                ),
+                (None, Some(a)) => (
+                    Some(a.uuid.clone()),
+                    a.name.clone(),
+                    (Tone::Live, tr("Microsoft account · online servers too")),
+                ),
+                (None, None) => (
+                    None,
+                    tr("Sign in with Microsoft").to_string(),
+                    (Tone::Off, tr(account::NEEDS_OWNER)),
+                ),
+            };
         let head = div()
             .flex_none()
             .size(px(80.))
